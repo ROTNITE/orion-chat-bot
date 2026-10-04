@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import (Message, ChatMemberUpdated, BotCommand, ChatPermissions)
 
 from .config import Config
@@ -898,6 +898,29 @@ class Orion:
             except asyncio.TimeoutError:pass
 
 
+async def _telegram_retry(label, operation, *, attempts=None):
+    """Retry transient Bot API network failures without killing the bot.
+
+    ``attempts=None`` means keep retrying until the network comes back or the
+    process is stopped. Telegram API errors (invalid token, bad request, etc.)
+    are intentionally not swallowed.
+    """
+    delay=1
+    attempt=0
+    while True:
+        try:
+            return await operation()
+        except TelegramNetworkError as exc:
+            attempt+=1
+            if attempts is not None and attempt>=attempts:
+                raise
+            wait=delay
+            log.warning('%s: Telegram временно недоступен (%s). Повтор через %s с.',
+                        label,str(exc)[:180],wait)
+            await asyncio.sleep(wait)
+            delay=min(delay*2,30)
+
+
 async def serve(config:Config):
     db=Database(config.db_path)
     bot=create_bot(config)
@@ -906,17 +929,35 @@ async def serve(config:Config):
     dp.include_router(orion.router)
     stop=asyncio.Event()
     try:
-        me=await bot.get_me()
+        # A single successful pre-flight check is not proof that the connection
+        # will stay up.  Do not terminate on the next transient timeout: wait for
+        # Telegram and continue automatically.
+        me=await _telegram_retry('getMe',lambda: bot.get_me())
         orion.bot_id=me.id
         orion.bot_username=me.username or ''
-        await bot.set_my_commands([BotCommand(command=k,description=v) for k,v in [
+
+        commands=[BotCommand(command=k,description=v) for k,v in [
             ('help','Справочник'),('profile','Профиль'),('id','Мой ID'),('stats','Статистика в чате'),
             ('settings','Настройки чата'),('warn','Предупреждение'),('mute','Мут'),('ban','Бан'),
             ('wallet','Виртуальный кошелёк'),('daily','Ежедневный бонус'),('rep','Репутация'),
-            ('clans','Кланы'),('remind','Напоминание'),('rules','Правила'),('report','Пожаловаться')]])
+            ('clans','Кланы'),('remind','Напоминание'),('rules','Правила'),('report','Пожаловаться')]]
+        try:
+            await _telegram_retry('setMyCommands',lambda: bot.set_my_commands(commands),attempts=3)
+        except TelegramNetworkError:
+            # Command suggestions are cosmetic; polling must still start.
+            log.warning('Не удалось обновить меню команд Telegram после 3 попыток; продолжаю запуск.')
+
+        # Long polling and webhook are mutually exclusive. This step is required,
+        # therefore transient network failures are retried until Telegram answers.
+        async def clear_webhook():
+            return await bot.delete_webhook(drop_pending_updates=False)
+        await _telegram_retry('deleteWebhook',clear_webhook)
+
         task=asyncio.create_task(orion.scheduler(bot,stop))
-        log.info('Started @%s (id=%s). Bot token is not logged.',me.username,me.id)
-        try:await dp.start_polling(bot,allowed_updates=['message','chat_member'])
+        log.info('Orion запущен: @%s (id=%s). Ожидаю сообщения. Токен в лог не записывается.',me.username,me.id)
+        try:
+            # aiogram itself uses polling backoff for temporary getUpdates errors.
+            await dp.start_polling(bot,allowed_updates=['message','chat_member'])
         finally:
             stop.set()
             await task

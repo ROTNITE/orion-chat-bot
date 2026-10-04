@@ -1,48 +1,43 @@
-# Windows one-click launcher
+# Windows-лаунчер Orion
 
-## START_ORION.cmd
+## Быстрый запуск
 
-Double-click `START_ORION.cmd`.
+Запустите `START_ORION.cmd` двойным кликом. При первом запуске лаунчер:
 
-On the first run it:
+1. проверит Python 3.10+;
+2. создаст `.venv`;
+3. установит зависимости;
+4. создаст `.env`;
+5. попросит токен от `@BotFather` скрытым вводом;
+6. проверит токен и соединение с Telegram;
+7. при необходимости предложит IPv4-only, управляемые записи `hosts` или HTTP/SOCKS-прокси;
+8. запустит Orion.
 
-1. finds Python 3.10+;
-2. creates `.venv` if needed;
-3. installs `requirements.txt` only when the requirements hash changes;
-4. creates `.env` from `.env.example`;
-5. asks for the BotFather token with hidden input and writes it to `.env`;
-6. calls Telegram `getMe` before starting the long-polling bot;
-7. if the direct connection fails, tries IPv4-only mode;
-8. optionally offers an Orion-managed `hosts` block and then an HTTP/SOCKS proxy;
-9. starts `python -m orion`.
+Все пользовательские сообщения и меню лаунчера отображаются на русском языке.
 
-On later runs, completed setup steps are skipped.
+## Меню обслуживания
 
-## ORION_MENU.cmd
-
-The maintenance menu can:
-
-- start Orion;
-- replace the BotFather token;
-- run DNS/TCP/Bot API diagnostics;
-- set or clear `TELEGRAM_PROXY`;
-- install the managed Telegram hosts block;
-- remove only the managed hosts block;
-- reinstall dependencies;
-- run the project test suite.
-
-Supported proxy examples:
+Запустите `ORION_MENU.cmd`:
 
 ```text
-socks5://127.0.0.1:1080
-http://127.0.0.1:7890
+=====================================
+              ORION CHAT
+=====================================
+[1] Запустить бота
+[2] Изменить токен BotFather
+[3] Диагностика Telegram
+[4] Настроить HTTP/SOCKS-прокси
+[5] Добавить записи Telegram в hosts
+[6] Удалить записи Orion из hosts
+[7] Переустановить зависимости Python
+[8] Запустить тесты проекта
+[9] Сбросить сетевые настройки Orion
+[0] Выход
 ```
 
-Proxy support uses aiogram's `AiohttpSession` and `aiohttp-socks`.
+## Hosts
 
-## hosts behavior
-
-The launcher never rewrites the whole file intentionally. When the user explicitly enables the fallback it creates a backup under `backups/` and inserts only a marked block:
+Orion не изменяет `hosts` автоматически без согласия пользователя. При выборе соответствующего пункта Windows запросит UAC. Перед изменением создаётся резервная копия. Orion добавляет только помеченный блок:
 
 ```text
 # >>> ORION TELEGRAM HOSTS >>>
@@ -51,22 +46,36 @@ The launcher never rewrites the whole file intentionally. When the user explicit
 # <<< ORION TELEGRAM HOSTS <<<
 ```
 
-If either hostname already has an active mapping outside Orion's block, Orion leaves that user-managed mapping untouched and warns instead of replacing it.
+`REMOVE_ORION_HOSTS.cmd` удаляет только этот блок, не затрагивая остальные пользовательские записи.
 
-`REMOVE_ORION_HOSTS.cmd` removes only the marked Orion block and flushes the Windows DNS cache. It does not restore an old full-file backup over unrelated later edits.
+Статический IP используется только как fallback: он может устареть, поэтому предпочтительнее обычный DNS или рабочий прокси/VPN.
 
-A static Telegram IP is only a fallback and can become stale. The launcher therefore does **not** add it when the normal Bot API connection works.
+## Прокси
 
-## .env network options
+Примеры:
 
-```dotenv
-TELEGRAM_PROXY=
-FORCE_IPV4=0
-TELEGRAM_TIMEOUT=60
+```text
+socks5://127.0.0.1:1080
+http://127.0.0.1:7890
 ```
 
-- `TELEGRAM_PROXY` accepts `http://`, `socks4://`, `socks4a://` or `socks5://` URLs.
-- `FORCE_IPV4=1` forces direct aiohttp connections to IPv4. It is ignored for proxy connectors.
-- `TELEGRAM_TIMEOUT` is the Bot API request timeout in seconds.
+Настройка сохраняется в `.env` как `TELEGRAM_PROXY`. Режим IPv4-only сохраняется как `FORCE_IPV4=1`.
 
-The bot token remains plaintext in `.env` because the bot must be able to read it unattended. `.env` is excluded by `.gitignore`; do not publish or send it to other people.
+
+## Что изменено в 1.1.4
+
+- Диагностика больше не запускает `Test-NetConnection`, который оставлял фоновые progress-строки поверх меню; TCP 443 проверяется через .NET с таймаутом 5 секунд.
+- `getMe` в диагностике выполняется до двух раз, чтобы один случайный timeout не считался окончательной поломкой.
+- Бот повторяет критические сетевые операции при временном `TelegramNetworkError` и не завершается после единичного `WinError 121`.
+- `FORCE_IPV4`/`TELEGRAM_PROXY` загружаются из проектного `.env` с приоритетом над унаследованными переменными Windows.
+- Пункты изменения токена, прокси, hosts и тестов теперь явно показывают итог операции.
+
+## 1.1.5: новый лаунчер
+
+`START_ORION.cmd` и `ORION_MENU.cmd` теперь запускают `tools/launcher.py`. Основная логика установки, диагностики и меню больше не зависит от PowerShell.
+
+### TG WS Proxy / MTProto
+
+TG WS Proxy Flowseal в актуальной конфигурации поднимает локальный MTProto endpoint, обычно `127.0.0.1:1443` с `secret`. Такой endpoint предназначен для Telegram Desktop. Orion на aiogram использует Bot API по HTTPS, поэтому MTProto endpoint не является HTTP/SOCKS proxy и не может быть записан в `TELEGRAM_PROXY`.
+
+Для `TELEGRAM_PROXY` используются `http://`, `socks4://`, `socks4a://` или `socks5://`. Если проверка сети не проходит, лаунчер всё равно может запустить Orion; runtime будет повторять подключение к Telegram.

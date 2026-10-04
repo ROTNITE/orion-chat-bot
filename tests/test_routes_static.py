@@ -32,3 +32,10 @@ def test_critical_commands_are_declared():
         if cmd=='transfer':
             assert cmds.get('give')=='give'
         else:assert cmd in cmds
+
+
+def test_polling_clears_webhook_before_start():
+    text = (Path(__file__).parent.parent / "orion/telegram_app.py").read_text(encoding="utf-8")
+    delete_pos = text.index("await bot.delete_webhook")
+    poll_pos = text.index("await dp.start_polling")
+    assert delete_pos < poll_pos
