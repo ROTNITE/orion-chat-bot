@@ -1,0 +1,13 @@
+services:
+  orion:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    volumes:
+      - orion_data:/app/data
+    read_only: true
+    tmpfs: /tmp
+
+volumes:
+  orion_data:
